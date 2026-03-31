@@ -15,7 +15,6 @@ class TestLoadBalancer(unittest.TestCase):
 		self.lb.servers[('127.10.0.3', 8002)] = self.s2
 
 	def test_server_join(self):
-		print("Running test_server_join...")
 		# Simulate JOIN message
 		with patch('socket.socket') as mock_socket:
 			mock_conn = MagicMock()
@@ -26,7 +25,6 @@ class TestLoadBalancer(unittest.TestCase):
 		# Expected: Server 127.10.0.4:8003 is added
 
 	def test_server_leave(self):
-		print("Running test_server_leave...")
 		# Simulate LEAVE message
 		with patch('socket.socket') as mock_socket:
 			mock_conn = MagicMock()
@@ -37,7 +35,6 @@ class TestLoadBalancer(unittest.TestCase):
 		# Expected: Server 127.10.0.2:8001 is removed
 
 	def test_round_robin_selection(self):
-		print("Running test_round_robin_selection...")
 		self.lb.algorithm = 1
 		# Both servers have capacity
 		s_first = self.lb.select_server()
@@ -46,7 +43,6 @@ class TestLoadBalancer(unittest.TestCase):
 		# Expected: Alternates between servers
 
 	def test_least_connections_selection(self):
-		print("Running test_least_connections_selection...")
 		self.lb.algorithm = 2
 		self.s1.active = 1
 		self.s2.active = 0
@@ -55,7 +51,6 @@ class TestLoadBalancer(unittest.TestCase):
 		# Expected: Chooses server with least active connections
 
 	def test_random_selection(self):
-		print("Running test_random_selection...")
 		self.lb.algorithm = 3
 		# Should return one of the available servers
 		s = self.lb.select_server()
@@ -63,7 +58,6 @@ class TestLoadBalancer(unittest.TestCase):
 		# Expected: Returns a random server
 
 	def test_no_available_server(self):
-		print("Running test_no_available_server...")
 		self.s1.active = self.s1.capacity
 		self.s2.active = self.s2.capacity
 		s = self.lb.select_server()
@@ -71,7 +65,6 @@ class TestLoadBalancer(unittest.TestCase):
 		# Expected: Returns None when all servers are at capacity
 
 	def test_release_server(self):
-		print("Running test_release_server...")
 		self.s1.active = 2
 		self.lb.release_server(self.s1)
 		self.assertEqual(self.s1.active, 1)

@@ -101,26 +101,34 @@ class LoadBalancer:
 					continue
 
 	def select_server(self):
+		"""
+		Select a server based on the configured algorithm:
+		1 = Round Robin, 2 = Least Connections, 3 = Random
+		Returns a ServerInfo object or None if no server is available.
+		"""
 		with self.lock:
 			available = [(k, s) for k, s in self.servers.items() if s.active < s.capacity]
 			if not available:
 				return None
+
 			if self.algorithm == 1:
 				# Round Robin
 				idx = self.rr_index % len(available)
 				self.rr_index += 1
 				key, server = available[idx]
-			elif self.algorithm == 2:
+			elif self.algorithm == 2: 
 				# Least Connections
+				# Select the server with the fewest active connections
 				key, server = min(available, key=lambda item: item[1].active)
 			elif self.algorithm == 3:
-				# Random
+				# Random selection
 				key, server = random.choice(available)
 			else:
-				# Default to Round Robin
+				# Default to Round Robin if unknown algorithm
 				idx = self.rr_index % len(available)
 				self.rr_index += 1
 				key, server = available[idx]
+
 			server.active += 1
 			server.last_seen = time.time()
 			return server

@@ -33,7 +33,6 @@ class TestClient(unittest.TestCase):
 		Test: Client successfully sends and receives responses for all requests.
 		Expected: All latencies are recorded (not None), length matches num_requests.
 		"""
-		print("\nRunning test_client_run_success...")
 		# Patch socket.socket to use DummySocket
 		orig_socket = socket.socket
 		socket.socket = lambda *a, **kw: DummySocket()
@@ -48,7 +47,6 @@ class TestClient(unittest.TestCase):
 		Test: Client fails to connect to the load balancer (connection refused).
 		Expected: No requests are sent, latencies list remains empty.
 		"""
-		print("\nRunning test_client_connection_failure...")
 		class FailingSocket(DummySocket):
 			def connect(self, addr):
 				raise ConnectionRefusedError()
@@ -64,7 +62,6 @@ class TestClient(unittest.TestCase):
 		Test: Client connects, but sending a request fails every time.
 		Expected: Latencies list has correct length, but all entries are None.
 		"""
-		print("\nRunning test_client_request_failure...")
 		class FailingSendSocket(DummySocket):
 			def sendall(self, data):
 				raise Exception("Send failed")

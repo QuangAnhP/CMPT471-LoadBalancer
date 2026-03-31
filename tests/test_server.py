@@ -20,7 +20,6 @@ class TestServer(unittest.TestCase):
 
 	@patch('socket.socket')
 	def test_register_with_lb(self, mock_socket):
-		print("Running test_register_with_lb...")
 		mock_sock = MagicMock()
 		mock_socket.return_value.__enter__.return_value = mock_sock
 		self.server.register_with_lb()
@@ -31,7 +30,6 @@ class TestServer(unittest.TestCase):
 
 	@patch('socket.socket')
 	def test_deregister_with_lb(self, mock_socket):
-		print("Running test_deregister_with_lb...")
 		mock_sock = MagicMock()
 		mock_socket.return_value.__enter__.return_value = mock_sock
 		self.server.deregister_with_lb()
@@ -40,7 +38,6 @@ class TestServer(unittest.TestCase):
 		# Expected: Deregistration message sent
 
 	def test_capacity_limit(self):
-		print("Running test_capacity_limit...")
 		# Simulate connections using dummy sockets
 		class DummyConn:
 			def __init__(self):
@@ -74,7 +71,6 @@ class TestServer(unittest.TestCase):
 			t.join()
 
 	def test_active_requests_decrement(self):
-		print("Running test_active_requests_decrement...")
 		class DummyConn:
 			def __init__(self):
 				self.closed = False
@@ -92,7 +88,6 @@ class TestServer(unittest.TestCase):
 		# Expected: active_requests decremented after processing
 
 	def test_handle_shutdown(self):
-		print("Running test_handle_shutdown...")
 		with patch.object(self.server, 'deregister_with_lb') as mock_dereg:
 			self.server.handle_shutdown(signal.SIGINT, None)
 			mock_dereg.assert_called_once()
