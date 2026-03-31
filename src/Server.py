@@ -1,11 +1,16 @@
 import socket
 import threading
-import sys
 import signal
 import time
+import random
+import argparse
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class Server:
-	def __init__(self, server_host, server_port, capacity=5):
+	def __init__(self, server_host, server_port, capacity=5, load_profile="flat"):
 		self.lb_host = "127.0.0.1"
 		self.lb_port = 10000
 		self.server_host = server_host  # e.g., 127.10.0.X
@@ -14,11 +19,22 @@ class Server:
 		self.active_requests = 0
 		self.lock = threading.Lock()
 		self.shutdown_event = threading.Event()
+
+		# Load profile controls simulated processing time per request:
+		#   flat   - constant 1.0s (original behaviour)
+		#   normal - Gaussian(mean=1.0s, std=0.3s), clamped to [0.05, 5.0]
+		#   bursty - 80% fast (0.2s) / 20% slow (3.0s) to simulate traffic spikes
+		self.load_profile = load_profile
+
 		signal.signal(signal.SIGINT, self.handle_shutdown)
 		signal.signal(signal.SIGTERM, self.handle_shutdown)
 
+	# ------------------------------------------------------------------ #
+	#  Registration                                                        #
+	# ------------------------------------------------------------------ #
+
 	def register_with_lb(self, timeout=5):
-		# Register with the load balancer (simple protocol: send 'JOIN <host> <port> <capacity>')
+		"""Send JOIN message to the load balancer. Retries until timeout."""
 		start = time.time()
 		while time.time() - start < timeout:
 			try:
@@ -27,61 +43,98 @@ class Server:
 					sock.connect((self.lb_host, self.lb_port))
 					msg = f"JOIN {self.server_host} {self.server_port} {self.capacity}"
 					sock.sendall(msg.encode())
-					print(f"Registered with load balancer: {msg}")
+					logger.info(f"Registered with load balancer: {msg}")
 					return True
 			except Exception as e:
-				print(f"Retrying registration with load balancer: {e}")
+				logger.debug(f"Retrying registration: {e}")
 				time.sleep(0.1)
-		print(f"Failed to register with load balancer after {timeout} seconds.")
+		logger.error(f"Failed to register with load balancer after {timeout}s.")
 		return False
 
 	def deregister_with_lb(self):
-		# Deregister with the load balancer (simple protocol: send 'LEAVE <host> <port>')
+		"""Send LEAVE message to the load balancer."""
 		try:
 			with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
 				sock.connect((self.lb_host, self.lb_port))
 				msg = f"LEAVE {self.server_host} {self.server_port}"
 				sock.sendall(msg.encode())
-				print(f"Deregistered from load balancer: {msg}")
+				logger.info(f"Deregistered from load balancer: {msg}")
 		except Exception as e:
-			print(f"Failed to deregister from load balancer: {e}")
+			logger.warning(f"Failed to deregister from load balancer: {e}")
 
-	def handle_shutdown(self, signum, frame):
-		print("Shutting down server...")
+	def handle_shutdown(self, _signum, _frame):
+		logger.info("Shutting down server...")
 		self.deregister_with_lb()
 		self.shutdown_event.set()
 
+	# ------------------------------------------------------------------ #
+	#  Request processing                                                  #
+	# ------------------------------------------------------------------ #
+
+	def _processing_delay(self):
+		"""Return simulated processing time in seconds based on load_profile."""
+		if self.load_profile == "normal":
+			# Gaussian around 1s; clamp to reasonable bounds
+			return max(0.05, min(5.0, random.gauss(1.0, 0.3)))
+		elif self.load_profile == "bursty":
+			# 20% of requests are slow (3.0s), 80% are fast (0.2s)
+			return 3.0 if random.random() < 0.2 else 0.2
+		else:
+			# flat (default): constant 1.0s
+			return 1.0
+
 	def process_request(self, conn, addr):
+		try:
+			data = conn.recv(4096)
+		except Exception as e:
+			logger.error(f"Failed to read from {addr}: {e}")
+			conn.close()
+			return
+
+		# Health check: respond immediately without counting against capacity
+		if data == b"PING":
+			try:
+				conn.sendall(b"PONG")
+			finally:
+				conn.close()
+			return
+
 		with self.lock:
 			if self.active_requests >= self.capacity:
 				conn.sendall(b"SERVER BUSY")
 				conn.close()
-				print(f"Rejected request from {addr}: capacity full")
+				logger.warning(f"Rejected request from {addr}: capacity full")
 				return
 			self.active_requests += 1
 		try:
-			data = conn.recv(4096)
-			# Simulate processing time
-			time.sleep(1)
+			delay = self._processing_delay()
+			time.sleep(delay)
 			response = f"Processed by {self.server_host}:{self.server_port}"
 			conn.sendall(response.encode())
-			print(f"Processed request from {addr}")
+			logger.info(f"Processed request from {addr} (delay={delay:.2f}s)")
 		except Exception as e:
-			print(f"Error processing request from {addr}: {e}")
+			logger.error(f"Error processing request from {addr}: {e}")
 		finally:
 			with self.lock:
 				self.active_requests -= 1
 			conn.close()
 
+	# ------------------------------------------------------------------ #
+	#  Main loop                                                           #
+	# ------------------------------------------------------------------ #
+
 	def run(self):
 		if not self.register_with_lb():
-			print("Server exiting due to registration failure.")
+			logger.error("Server exiting due to registration failure.")
 			return
 		with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_sock:
 			server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 			server_sock.bind((self.server_host, self.server_port))
 			server_sock.listen()
-			print(f"Server listening on {self.server_host}:{self.server_port} (capacity: {self.capacity})")
+			logger.info(
+				f"Server listening on {self.server_host}:{self.server_port} "
+				f"(capacity={self.capacity}, profile={self.load_profile})"
+			)
 			while not self.shutdown_event.is_set():
 				try:
 					server_sock.settimeout(1.0)
@@ -90,16 +143,24 @@ class Server:
 				except socket.timeout:
 					continue
 				except Exception as e:
-					print(f"Server error: {e}")
-		print("Server stopped.")
+					logger.error(f"Server error: {e}")
+		logger.info("Server stopped.")
+
 
 if __name__ == "__main__":
-	# Example usage: python Server.py <SERVER_HOST> <SERVER_PORT> [CAPACITY]
-	if len(sys.argv) < 3:
-		print("Usage: python Server.py <SERVER_HOST> <SERVER_PORT> [CAPACITY]")
-		sys.exit(1)
-	server_host = sys.argv[1]  # e.g., 127.10.0.2
-	server_port = int(sys.argv[2])
-	capacity = int(sys.argv[3]) if len(sys.argv) > 3 else 5
-	server = Server(server_host, server_port, capacity)
+	parser = argparse.ArgumentParser(description="Backend server for the load balancer.")
+	parser.add_argument("server_host", help="Host address for this server (e.g. 127.10.0.2)")
+	parser.add_argument("server_port", type=int, help="Port for this server to listen on")
+	parser.add_argument("capacity", type=int, nargs="?", default=5,
+	                    help="Max concurrent requests (default: 5)")
+	parser.add_argument("--load-profile", default="flat", choices=["flat", "normal", "bursty"],
+	                    help="Simulated processing time profile (default: flat)")
+	args = parser.parse_args()
+
+	logging.basicConfig(
+		level=logging.INFO,
+		format="%(asctime)s [Server %(process)d] %(levelname)s %(message)s"
+	)
+
+	server = Server(args.server_host, args.server_port, args.capacity, args.load_profile)
 	server.run()
