@@ -81,7 +81,7 @@ def run_experiment(algorithm, num_servers, num_clients, num_requests,
     for i in range(num_servers):
         host = f"127.{10 + i}.0.2"
         port = base_port + i
-        capacity = (i + 1) * 2  # 2, 4, 6, ...
+        capacity = 1 if i == 0 else (i + 1) * 5  # 1, 10, 15, ...
         proc = subprocess.Popen(
             [sys.executable, SV_PATH, host, str(port), str(capacity),
              f"--load-profile={load_profile}"],
@@ -166,6 +166,13 @@ def run_experiment(algorithm, num_servers, num_clients, num_requests,
         if fairness is not None:
             print(f"  Weighted Fairness (Jain's index): {fairness:.4f}")
         print(f"  LB throughput (last 10s window): {lb_data.get('throughput_rps', 0):.3f} req/s")
+        total_queued  = lb_data.get("total_queued", 0)
+        queue_timeout = lb_data.get("queue_timeouts", 0)
+        queue_size    = lb_data.get("queue_size", 0)
+        print(f"\n--- Queue Stats ---")
+        print(f"  Total queued    : {total_queued}")
+        print(f"  Timed out       : {queue_timeout}")
+        print(f"  Still waiting   : {queue_size}")
 
     # -- Write per-experiment summary CSV ---------------------------
     summary = {
@@ -186,6 +193,8 @@ def run_experiment(algorithm, num_servers, num_clients, num_requests,
         "jitter_ms": round(jitter, 2),
         "throughput_rps": round(throughput, 3),
         "weighted_fairness": lb_data.get("weighted_fairness") if lb_data else None,
+        "total_queued": lb_data.get("total_queued", 0) if lb_data else 0,
+        "queue_timeouts": lb_data.get("queue_timeouts", 0) if lb_data else 0,
     }
 
     # -- Cleanup -----------------------------------------------------
@@ -262,18 +271,26 @@ def main():
 
 
 def _print_comparison_table(summaries):
-    print(f"\n{'='*70}")
+    print(f"\n{'='*82}")
     print("  ALGORITHM COMPARISON")
-    print(f"{'='*70}")
-    header = f"  {'Algorithm':<22} {'OK/Total':>10} {'Avg ms':>8} {'P95 ms':>8} {'P99 ms':>8} {'Fair':>6}"
+    print(f"{'='*82}")
+    header = (f"  {'Algorithm':<22} {'OK/Total':>10} {'Queued':>7} {'T/O':>5} "
+              f"{'RPS':>6} {'Avg ms':>7} {'P95 ms':>7} {'Fair':>6}")
     print(header)
-    print(f"  {'-'*65}")
+    print(f"  {'-'*78}")
     for s in summaries:
-        total = s["clients"] * s["requests_per_client"] if "clients" in s else "?"
+        total    = s["clients"] * s["requests_per_client"] if "clients" in s else "?"
         fairness = f"{s['weighted_fairness']:.3f}" if s.get("weighted_fairness") is not None else "  N/A"
+        queued   = s.get("total_queued", 0)
+        timed    = s.get("queue_timeouts", 0)
         print(f"  {s['algo_name']:<22} {s['total_ok']:>5}/{total:<4} "
-              f"{s['avg_ms']:>8.1f} {s['p95_ms']:>8.1f} {s['p99_ms']:>8.1f} {fairness:>6}")
-    print(f"{'='*70}\n")
+              f"{queued:>7} {timed:>5} "
+              f"{s['throughput_rps']:>6.2f} "
+              f"{s['avg_ms']:>7.1f} {s['p95_ms']:>7.1f} {fairness:>6}")
+    print(f"{'='*82}")
+    print("  Queued = requests that waited in LB queue (no server slot free)")
+    print("  T/O    = queued requests dropped after timeout")
+    print(f"\n")
 
 
 def _write_comparison_csv(summaries, filepath):
