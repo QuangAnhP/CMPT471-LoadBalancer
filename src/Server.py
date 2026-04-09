@@ -9,8 +9,9 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+
 class Server:
-	def __init__(self, server_host, server_port, capacity=5, load_profile="flat"):
+	def __init__(self, server_host, server_port, capacity=5, processing_delay="constant"):
 		self.lb_host = "127.0.0.1"
 		self.lb_port = 10000
 		self.server_host = server_host  # e.g., 127.10.0.X
@@ -20,11 +21,11 @@ class Server:
 		self.lock = threading.Lock()
 		self.shutdown_event = threading.Event()
 
-		# Load profile controls simulated processing time per request:
-		#   flat   - constant 1.0s (original behaviour)
-		#   normal - Gaussian(mean=1.0s, std=0.3s), clamped to [0.05, 5.0]
-		#   bursty - 80% fast (0.2s) / 20% slow (3.0s) to simulate traffic spikes
-		self.load_profile = load_profile
+		# Processing profile controls simulated processing time per request:
+		#   constant - always 1.0s (original behaviour)
+		#   variable - Gaussian(mean=1.0s, std=0.3s), clamped to [0.05, 5.0]
+		#   bimodal  - 80% fast (0.2s) / 20% slow (3.0s) to simulate variable processing times
+		self.processing_delay = processing_delay
 
 		signal.signal(signal.SIGINT, self.handle_shutdown)
 		signal.signal(signal.SIGTERM, self.handle_shutdown)
@@ -71,16 +72,16 @@ class Server:
 	#  Request processing                                                  #
 	# ------------------------------------------------------------------ #
 
-	def _processing_delay(self):
-		"""Return simulated processing time in seconds based on load_profile."""
-		if self.load_profile == "normal":
+	def _processing_time(self):
+		"""Return simulated processing time in seconds based on processing_delay (not traffic load)."""
+		if self.processing_delay == "variable":
 			# Gaussian around 1s; clamp to reasonable bounds
 			return max(0.05, min(5.0, random.gauss(1.0, 0.3)))
-		elif self.load_profile == "bursty":
+		elif self.processing_delay == "bimodal":
 			# 20% of requests are slow (3.0s), 80% are fast (0.2s)
 			return 3.0 if random.random() < 0.2 else 0.2
 		else:
-			# flat (default): constant 1.0s
+			# constant (default): always 1.0s
 			return 1.0
 
 	def process_request(self, conn, addr):
@@ -107,11 +108,11 @@ class Server:
 				return
 			self.active_requests += 1
 		try:
-			delay = self._processing_delay()
-			time.sleep(delay)
+			proc_time = self._processing_time()
+			time.sleep(proc_time)
 			response = f"Processed by {self.server_host}:{self.server_port}"
 			conn.sendall(response.encode())
-			logger.info(f"Processed request from {addr} (delay={delay:.2f}s)")
+			logger.info(f"Processed request from {addr} (processing_time={proc_time:.2f}s)")
 		except Exception as e:
 			logger.error(f"Error processing request from {addr}: {e}")
 		finally:
@@ -133,7 +134,7 @@ class Server:
 			server_sock.listen()
 			logger.info(
 				f"Server listening on {self.server_host}:{self.server_port} "
-				f"(capacity={self.capacity}, profile={self.load_profile})"
+				f"(capacity={self.capacity}, delay profile={self.processing_delay})"
 			)
 			while not self.shutdown_event.is_set():
 				try:
@@ -152,9 +153,9 @@ if __name__ == "__main__":
 	parser.add_argument("server_host", help="Host address for this server (e.g. 127.10.0.2)")
 	parser.add_argument("server_port", type=int, help="Port for this server to listen on")
 	parser.add_argument("capacity", type=int, nargs="?", default=5,
-	                    help="Max concurrent requests (default: 5)")
-	parser.add_argument("--load-profile", default="flat", choices=["flat", "normal", "bursty"],
-	                    help="Simulated processing time profile (default: flat)")
+						help="Max concurrent requests (default: 5)")
+	parser.add_argument("--processing-delay", default="constant", choices=["constant", "variable", "bimodal"],
+						help="Simulated different processing time delays (default: constant)")
 	args = parser.parse_args()
 
 	logging.basicConfig(
@@ -162,5 +163,5 @@ if __name__ == "__main__":
 		format="%(asctime)s [Server %(process)d] %(levelname)s %(message)s"
 	)
 
-	server = Server(args.server_host, args.server_port, args.capacity, args.load_profile)
+	server = Server(args.server_host, args.server_port, args.capacity, args.processing_delay)
 	server.run()

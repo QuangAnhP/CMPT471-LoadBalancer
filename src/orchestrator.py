@@ -4,19 +4,24 @@ orchestrator.py — Experiment runner for the load balancer.
 Spawns a load balancer and N backend servers as subprocesses, then runs M
 concurrent clients (in threads, in-process) and aggregates metrics.
 
+Each server's 'processing delay' controls the simulated processing time per request:
+	- constant: always 1.0s
+	- variable: Gaussian(mean=1.0s, std=0.3s), clamped to [0.05, 5.0]
+	- bimodal: 80% fast (0.2s), 20% slow (3.0s)
+
 Usage:
   python orchestrator.py [options]
 
 Examples:
-  # Round Robin, 3 servers, 5 clients, 10 requests each, flat load:
-  python orchestrator.py --algorithm 1 --servers 3 --clients 5 --requests 10
+    # Round Robin, 3 servers, 5 clients, 10 requests each, constant processing time:
+    python orchestrator.py --algorithm 1 --servers 3 --clients 5 --requests 10
 
-  # Weighted Round Robin with bursty servers, kill one mid-experiment:
-  python orchestrator.py --algorithm 4 --servers 4 --clients 8 --requests 20 \\
-      --load-profile bursty --kill-server
+    # Weighted Round Robin with bimodal processing servers, kill one mid-experiment:
+    python orchestrator.py --algorithm 4 --servers 4 --clients 8 --requests 20 \\
+            --processing-delay bimodal --kill-server
 
-  # Compare all algorithms (runs 4 experiments sequentially):
-  python orchestrator.py --compare-all --servers 3 --clients 5 --requests 10
+	# Compare all algorithms (runs 4 experiments sequentially):
+	python orchestrator.py --compare-all --servers 3 --clients 5 --requests 10
 """
 import sys
 import os
@@ -54,7 +59,7 @@ def _run_client(client_id, lb_host, lb_port, num_requests, interval, message, re
 # ------------------------------------------------------------------ #
 
 def run_experiment(algorithm, num_servers, num_clients, num_requests,
-                   interval, load_profile, kill_server, output_dir):
+                   interval, processing_delay, kill_server, output_dir):
     """
     Run one experiment. Returns a dict of aggregate metrics.
     """
@@ -64,7 +69,7 @@ def run_experiment(algorithm, num_servers, num_clients, num_requests,
     print(f"\n{'='*60}")
     print(f"  Algorithm : {algorithm} — {algo_name}")
     print(f"  Servers   : {num_servers}  |  Clients: {num_clients}  |  Req/client: {num_requests}")
-    print(f"  Profile   : {load_profile}  |  Kill server: {kill_server}")
+    print(f"  Processing Delay Profile: {processing_delay}  |  Kill server: {kill_server}")
     print(f"{'='*60}\n")
 
     # -- Start load balancer ----------------------------------------
@@ -76,19 +81,20 @@ def run_experiment(algorithm, num_servers, num_clients, num_requests,
 
     # -- Start backend servers with varying capacities ---------------
     # Capacities: 2, 4, 6, ... so servers have different weights
+    # Each server's processing_delay controls simulated processing time per request
     server_procs = []
     base_port = 9300
     for i in range(num_servers):
         host = f"127.{10 + i}.0.2"
         port = base_port + i
-        capacity = (i + 1) * 2  # 2, 4, 6, ...
+        capacity = 5 if i == 0 else (i + 1) * 5
         proc = subprocess.Popen(
             [sys.executable, SV_PATH, host, str(port), str(capacity),
-             f"--load-profile={load_profile}"],
+             f"--processing-delay={processing_delay}"],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT
         )
         server_procs.append((proc, host, port, capacity))
-        print(f"  Server {i+1}: {host}:{port}  capacity={capacity}  profile={load_profile}")
+        print(f"  Server {i+1}: {host}:{port}  capacity={capacity}  processing_delay={processing_delay}")
     time.sleep(0.6)
 
     # -- Launch client threads ---------------------------------------
@@ -134,14 +140,13 @@ def run_experiment(algorithm, num_servers, num_clients, num_requests,
     avg = sum(s) / n if n else 0
     p50 = s[n // 2] if n else 0
     p95 = s[min(int(n * 0.95), n - 1)] if n else 0
-    p99 = s[min(int(n * 0.99), n - 1)] if n else 0
     diffs = [abs(all_latencies[i + 1] - all_latencies[i]) for i in range(len(all_latencies) - 1)]
     jitter = statistics.stdev(diffs) if len(diffs) > 1 else 0.0
     throughput = n / elapsed if elapsed > 0 else 0
 
     print(f"\n--- Client Results ---")
     print(f"  Total    : {num_clients * num_requests} req  |  OK: {n}  |  Errors: {errors}")
-    print(f"  Latency  : Avg={avg:.1f}ms  P50={p50:.1f}ms  P95={p95:.1f}ms  P99={p99:.1f}ms")
+    print(f"  Latency  : Avg={avg:.1f}ms  P50={p50:.1f}ms  P95={p95:.1f}ms")
     print(f"  Jitter   : {jitter:.1f} ms  |  Throughput: {throughput:.2f} req/s")
 
     # -- Read LB metrics (wait for background writer) ---------------
@@ -174,7 +179,7 @@ def run_experiment(algorithm, num_servers, num_clients, num_requests,
         "servers": num_servers,
         "clients": num_clients,
         "requests_per_client": num_requests,
-        "load_profile": load_profile,
+        "processing_delay": processing_delay,
         "kill_server": kill_server,
         "total_ok": n,
         "total_errors": errors,
@@ -182,7 +187,6 @@ def run_experiment(algorithm, num_servers, num_clients, num_requests,
         "avg_ms": round(avg, 2),
         "p50_ms": round(p50, 2),
         "p95_ms": round(p95, 2),
-        "p99_ms": round(p99, 2),
         "jitter_ms": round(jitter, 2),
         "throughput_rps": round(throughput, 3),
         "weighted_fairness": lb_data.get("weighted_fairness") if lb_data else None,
@@ -220,8 +224,8 @@ def main():
                         help="Requests per client")
     parser.add_argument("--interval", type=float, default=0.05,
                         help="Seconds between client requests (default: 0.05)")
-    parser.add_argument("--load-profile", default="flat", choices=["flat", "normal", "bursty"],
-                        help="Server load profile")
+    parser.add_argument("--processing-delay", default="constant", choices=["constant", "variable", "bimodal"],
+                        help="Adjustable server processing delay profile")
     parser.add_argument("--kill-server", action="store_true",
                         help="Kill one server mid-experiment to test failover")
     parser.add_argument("--output-dir", default="results",
@@ -241,7 +245,7 @@ def main():
                 num_clients=args.clients,
                 num_requests=args.requests,
                 interval=args.interval,
-                load_profile=args.load_profile,
+                processing_delay=args.processing_delay,
                 kill_server=args.kill_server,
                 output_dir=args.output_dir,
             )
@@ -255,7 +259,7 @@ def main():
             num_clients=args.clients,
             num_requests=args.requests,
             interval=args.interval,
-            load_profile=args.load_profile,
+            processing_delay=args.processing_delay,
             kill_server=args.kill_server,
             output_dir=args.output_dir,
         )
@@ -265,14 +269,14 @@ def _print_comparison_table(summaries):
     print(f"\n{'='*70}")
     print("  ALGORITHM COMPARISON")
     print(f"{'='*70}")
-    header = f"  {'Algorithm':<22} {'OK/Total':>10} {'Avg ms':>8} {'P95 ms':>8} {'P99 ms':>8} {'Fair':>6}"
+    header = f"  {'Algorithm':<22} {'OK/Total':>10} {'Avg ms':>8} {'P95 ms':>8} {'Fair':>6}"
     print(header)
     print(f"  {'-'*65}")
     for s in summaries:
         total = s["clients"] * s["requests_per_client"] if "clients" in s else "?"
         fairness = f"{s['weighted_fairness']:.3f}" if s.get("weighted_fairness") is not None else "  N/A"
         print(f"  {s['algo_name']:<22} {s['total_ok']:>5}/{total:<4} "
-              f"{s['avg_ms']:>8.1f} {s['p95_ms']:>8.1f} {s['p99_ms']:>8.1f} {fairness:>6}")
+              f"{s['avg_ms']:>8.1f} {s['p95_ms']:>8.1f} {fairness:>6}")
     print(f"{'='*70}\n")
 
 

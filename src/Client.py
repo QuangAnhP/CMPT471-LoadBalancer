@@ -78,16 +78,14 @@ class Client:
 		s = sorted(valid)
 		n = len(s)
 		avg = sum(valid) / n
-		p50 = s[n // 2]
 		p95 = s[min(int(n * 0.95), n - 1)]
-		p99 = s[min(int(n * 0.99), n - 1)]
 
 		# Jitter: RMS of consecutive inter-request latency differences
 		diffs = [abs(valid[i + 1] - valid[i]) for i in range(len(valid) - 1)]
 		jitter = (sum(d ** 2 for d in diffs) / len(diffs)) ** 0.5 if diffs else 0.0
 
 		print(f"\nRequests: {n}/{total} successful")
-		print(f"Latency  — Avg: {avg:.1f} ms  P50: {p50:.1f} ms  P95: {p95:.1f} ms  P99: {p99:.1f} ms")
+		print(f"Latency  — Avg: {avg:.1f} ms  P95: {p95:.1f} ms")
 		print(f"Jitter   — {jitter:.1f} ms (RMS of consecutive differences)")
 
 	def export_csv(self, filename):

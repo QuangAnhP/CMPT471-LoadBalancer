@@ -45,7 +45,7 @@ class LoadBalancer:
 	#  Health checking                                                     #
 	# ------------------------------------------------------------------ #
 
-	def health_check_loop(self, interval=2):
+	def health_check_loop(self, interval=1):
 		while not self.shutdown_event.is_set():
 			time.sleep(interval)
 			to_remove = []
